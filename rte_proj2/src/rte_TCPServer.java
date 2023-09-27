@@ -30,7 +30,7 @@ import java.security.spec.X509EncodedKeySpec;
 public class rte_TCPServer{													//class static variables to be used by different threads
 	private static ServerSocket servSock;
 	private static int portnum = 22700;
-	public static File chatfile;
+	public static File chatfile, keyfile;
 	public static PublicKey publicKey;
 	private static PrivateKey privateKey;
 	public static ArrayList<String> chats = new ArrayList<>();			//storing chats in a static list
@@ -95,6 +95,21 @@ public class rte_TCPServer{													//class static variables to be used by d
 		rte_TCPServer.privateKey = pair.getPrivate();
 		rte_TCPServer.publicKey  = pair.getPublic();	
 	}
+	
+	public static String decryptMessage(byte[] cipherMessage) {
+	    try {
+	        Cipher decryptCipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+	        decryptCipher.init(Cipher.DECRYPT_MODE, rte_TCPServer.privateKey);
+	        byte[] cipherMessageBytes = decryptCipher.doFinal(cipherMessage);
+	        String decryptedMessage = new String(cipherMessageBytes, StandardCharsets.UTF_8);
+	        return decryptedMessage;
+	    } catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException | BadPaddingException e) {
+	        e.printStackTrace();
+	        // Handle the exception or return an error message as needed
+	        return "Error: Failed to decrypt the message.";
+	    }
+	}
+
 	
 	/**
 	 * Run program to accept the incoming socket from the client 
@@ -162,8 +177,6 @@ class ClientHandler extends Thread
 	private Socket clientThread;  
 	private BufferedReader dataFromClient;
 	private PrintWriter dataToClient;
-	private DataInputStream keyStreamFromClient;
-	private DataOutputStream keyStreamToClient;
 	private String user;
 
 	public ClientHandler(Socket s){
@@ -174,8 +187,9 @@ class ClientHandler extends Thread
 			//Set up input and output streams for socket
 			dataFromClient = new BufferedReader(new InputStreamReader(clientThread.getInputStream())); 
 			dataToClient = new PrintWriter(clientThread.getOutputStream(),true); 
-			keyStreamFromClient = new DataInputStream(clientThread.getInputStream());
-			keyStreamToClient = new DataOutputStream(clientThread.getOutputStream());
+			
+			receivePublicKeyFromClient();
+			sendPublicKeyToClient();
 		}
 		catch(IOException e){
 			e.printStackTrace();
@@ -190,42 +204,50 @@ class ClientHandler extends Thread
 		dataToClient.println(msg);
 	}
 	
+	// Function to send the server's public key to the client
+	private void sendPublicKeyToClient() {
+	    try {
+	        DataOutputStream keyStreamToClient = new DataOutputStream(clientThread.getOutputStream());
 
-	public PublicKey handleKeys() throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
-		int publicKeyLength = keyStreamFromClient.readInt();
+	        byte[] publicKeyBytes = rte_TCPServer.publicKey.getEncoded();
+	        keyStreamToClient.writeInt(publicKeyBytes.length);
+	        keyStreamToClient.write(publicKeyBytes);
 
-	    // Read the public key bytes
-	    byte[] publicKeyBytes = new byte[publicKeyLength];
-	    keyStreamFromClient.readFully(publicKeyBytes);
-	    // Reconstruct the public key
-	    KeyFactory keyFactory = KeyFactory.getInstance("RSA"); // Change to the appropriate algorithm if needed
-	    X509EncodedKeySpec keySpec = new X509EncodedKeySpec(publicKeyBytes);
-	    PublicKey receivedPublicKey = keyFactory.generatePublic(keySpec);
-	    
-	    return receivedPublicKey;
+	        keyStreamToClient.flush();        
+	    } catch (IOException e) {
+	        e.printStackTrace();
+	    }
 	}
 	
-	//this method is called automatically when a client thread starts.
+	private void receivePublicKeyFromClient() {
+		try {
+	    	DataInputStream keyStreamFromClient = new DataInputStream(clientThread.getInputStream());
+	    	int publicKeyLength = keyStreamFromClient.readInt();
+
+	        byte[] publicKeyBytes = new byte[publicKeyLength];
+	        keyStreamFromClient.readFully(publicKeyBytes);
+
+	        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+	        X509EncodedKeySpec keySpec = new X509EncodedKeySpec(publicKeyBytes);
+	        
+	        
+	        PublicKey clientPublicKey = keyFactory.generatePublic(keySpec);
+	        rte_TCPServer.clientKeyMap.put(this.clientThread, clientPublicKey);
+
+	        //System.out.println("Received server public key: " + rte_TCPClient.serverPublicKey);
+	    } catch (IOException | NoSuchAlgorithmException | InvalidKeySpecException e) {
+	        e.printStackTrace();
+	    }
+	}
+
+
+
 	public void run(){
 		try {
 			//setup writer for appending and reader for reading
 			FileWriter chatLogFile = new FileWriter(rte_TCPServer.chatfile, true);
 			BufferedReader readChatFile = new BufferedReader(new FileReader(rte_TCPServer.chatfile.getAbsolutePath()));
 			Scanner scannerForChatFile = new Scanner(rte_TCPServer.chatfile);			
-		
-			byte[] publicKeyBytes = rte_TCPServer.publicKey.getEncoded();
-			
-			int publicKeyLength = publicKeyBytes.length;
-			
-			keyStreamToClient.writeInt(publicKeyLength);
-			keyStreamToClient.write(publicKeyBytes);
-			keyStreamToClient.flush();
-			
-			
-			//add client and public key to map		
-			rte_TCPServer.clientKeyMap.put(this.clientThread, handleKeys());
-			
-			System.out.println(rte_TCPServer.clientKeyMap.get(this.clientThread));
 			
 			
 			//setting up user name
@@ -256,9 +278,10 @@ class ClientHandler extends Thread
 				rte_TCPServer.broadcast(username + " connected to the chatroom", this); //broadcasting to other users that somebody joined
 				
 				//handling and processing incoming data
-				String messageFromClient = dataFromClient.readLine(); 
 				
-				
+				String encryptedMessageFromClient = dataFromClient.readLine();
+				String messageFromClient;
+				messageFromClient = encryptedMessageFromClient;
 				while (!messageFromClient.equals("DONE")){
 					//System.out.println(username + ": " + messageFromClient);			//printing out username before message					
 					if(!messageFromClient.equals("DONE")) {							//checking "done" so we dont write it to chat file
@@ -270,6 +293,8 @@ class ClientHandler extends Thread
 					chatLogFile.flush();
 					messageFromClient = dataFromClient.readLine();
 				}
+				
+			
 
 				chatLogFile.write(username + " disconnected from the chatroom\n"); //logging when someone disconnects from chatroom
 				chatLogFile.close();
@@ -282,12 +307,6 @@ class ClientHandler extends Thread
 		}
 		catch(IOException e){
 			e.printStackTrace();
-		} catch (InvalidKeySpecException e1) {
-			// TODO Auto-generated catch block
-			e1.printStackTrace();
-		} catch (NoSuchAlgorithmException e1) {
-			// TODO Auto-generated catch block
-			e1.printStackTrace();
 		}
 
 		finally{

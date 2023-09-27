@@ -111,9 +111,13 @@ public class rte_TCPClient
 			BufferedReader dataFromServer = new BufferedReader(new InputStreamReader(link.getInputStream()));
 			PrintWriter dataToServer = new PrintWriter(link.getOutputStream(),true); 
 
+			//Psuedo handshake
+			sendPublicKeyToServer(link);
+			receivePublicKeyFromServer(link);
+			
 			//creating sender thread
 			Sender senderThread = new Sender(dataToServer, link);
-
+			
 			//starting the thread
 			senderThread.start();
 			
@@ -159,6 +163,41 @@ public class rte_TCPClient
 		}
 
 	}
+	private static void sendPublicKeyToServer(Socket link) {
+		 try {
+		        DataOutputStream keyStreamToServer = new DataOutputStream(link.getOutputStream());
+
+		        byte[] publicKeyBytes = rte_TCPClient.publicKey.getEncoded();
+		        keyStreamToServer.writeInt(publicKeyBytes.length);
+		        keyStreamToServer.write(publicKeyBytes);
+
+		        keyStreamToServer.flush();        
+		    } catch (IOException e) {
+		        e.printStackTrace();
+		    }
+	}
+	
+	
+	// Function to receive the server's public key from the server
+	private static void receivePublicKeyFromServer(Socket link) {
+	    try {
+	    	DataInputStream keyStreamFromServer = new DataInputStream(link.getInputStream());
+	    	int publicKeyLength = keyStreamFromServer.readInt();
+
+	        byte[] publicKeyBytes = new byte[publicKeyLength];
+	        keyStreamFromServer.readFully(publicKeyBytes);
+
+	        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+	        X509EncodedKeySpec keySpec = new X509EncodedKeySpec(publicKeyBytes);
+	        rte_TCPClient.serverPublicKey = keyFactory.generatePublic(keySpec);
+
+	        //System.out.println("Received server public key: " + rte_TCPClient.serverPublicKey);
+	    } catch (IOException | NoSuchAlgorithmException | InvalidKeySpecException e) {
+	        e.printStackTrace();
+	    }
+	}
+
+
 	
 	public static void rsaKeyGeneration() throws NoSuchAlgorithmException, IOException {
 		KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
@@ -168,14 +207,13 @@ public class rte_TCPClient
 		rte_TCPClient.publicKey  = pair.getPublic();	
 	}
 
-	public static byte[] encryptMessage(String plainMessage, PublicKey serverPublicKey) throws InvalidKeyException, NoSuchAlgorithmException, NoSuchPaddingException, IllegalBlockSizeException, BadPaddingException {
-		Cipher encryptCipher = Cipher.getInstance("RSA");
-		encryptCipher.init(Cipher.ENCRYPT_MODE, publicKey);
-		byte[] plainMessageBytes = plainMessage.getBytes(StandardCharsets.UTF_8);
-		byte[] encryptedMessageBytes = encryptCipher.doFinal(plainMessageBytes);
-		
-		return encryptedMessageBytes;
-	}
+	 public static byte[] encryptMessage(String plainMessage, PublicKey recipientPublicKey) throws Exception {
+	        Cipher encryptCipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+	        encryptCipher.init(Cipher.ENCRYPT_MODE, recipientPublicKey);
+	        byte[] plainMessageBytes = plainMessage.getBytes(StandardCharsets.UTF_8);
+	        byte[] encryptedMessageBytes = encryptCipher.doFinal(plainMessageBytes);
+	        return encryptedMessageBytes;
+	    }
 	
 	public static String decryptMessage(byte[] cipherMessage) throws InvalidKeyException, NoSuchAlgorithmException, NoSuchPaddingException, IllegalBlockSizeException, BadPaddingException {
 		Cipher decryptCipher = Cipher.getInstance("RSA");
@@ -192,13 +230,10 @@ class Sender extends Thread{
 	
 	//constructor and printwriter object for sender thread
 	private PrintWriter dataToServer;
-	private DataOutputStream keyStreamToServer;
-	private DataInputStream keyStreamFromServer;
+
 	
 	public Sender(PrintWriter dataToServer, Socket link) throws IOException{
 		this.dataToServer = dataToServer;
-		this.keyStreamToServer = new DataOutputStream(link.getOutputStream());
-		this.keyStreamFromServer = new DataInputStream(link.getInputStream());
 	}
 
 	// overwrite the method 'run' of the Runnable interface
@@ -209,25 +244,14 @@ class Sender extends Thread{
 			//Set up stream for keyboard entry
 			BufferedReader userEntry = new BufferedReader(new InputStreamReader(System.in));
 			
-			rte_TCPClient.serverPublicKey = handleKeys();
-			
 			String plainMessageToBeSent;		
-			byte[] publicKeyBytes = rte_TCPClient.publicKey.getEncoded();
-			
-			// Send the length of the byte array first
-		    int publicKeyLength = publicKeyBytes.length;		    
-		    keyStreamToServer.writeInt(publicKeyLength);
-
-		    // Send the public key bytes
-		    keyStreamToServer.write(publicKeyBytes);
-		    keyStreamToServer.flush();
 			
 			dataToServer.println(rte_TCPClient.username); // sending the username to the server
-			
 			// Get data from the user, encrypt it, and send it to the server
 			do{		
 				plainMessageToBeSent = userEntry.readLine();			
-				dataToServer.println(rte_TCPClient.encryptMessage(plainMessageToBeSent, rte_TCPClient.serverPublicKey)); 			
+				dataToServer.println(rte_TCPClient.encryptMessage(plainMessageToBeSent, rte_TCPClient.serverPublicKey)); 	
+				//dataToServer.println(plainMessageToBeSent);
 				
 			}while (!plainMessageToBeSent.equals("DONE"));
 			
@@ -237,13 +261,10 @@ class Sender extends Thread{
 		}catch(IOException e) {
 			System.out.println("Unable to connect!");
 			System.exit(1);
-		} catch (NoSuchAlgorithmException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (InvalidKeySpecException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
 		} catch (InvalidKeyException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (NoSuchAlgorithmException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		} catch (NoSuchPaddingException e) {
@@ -255,20 +276,9 @@ class Sender extends Thread{
 		} catch (BadPaddingException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
+		} catch (Exception e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
 		}
-	}
-	
-	public PublicKey handleKeys() throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
-		int publicKeyLength = keyStreamFromServer.readInt();
-
-	    // Read the public key bytes
-	    byte[] publicKeyBytes = new byte[publicKeyLength];
-	    keyStreamFromServer.readFully(publicKeyBytes);
-	    // Reconstruct the public key
-	    KeyFactory keyFactory = KeyFactory.getInstance("RSA"); // Change to the appropriate algorithm if needed
-	    X509EncodedKeySpec keySpec = new X509EncodedKeySpec(publicKeyBytes);
-	    PublicKey receivedPublicKey = keyFactory.generatePublic(keySpec);
-	    
-	    return receivedPublicKey;
 	}
 }
