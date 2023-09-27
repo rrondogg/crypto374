@@ -109,14 +109,14 @@ public class rte_TCPClient
 
 			// Set up input and output streams for the connection
 			BufferedReader dataFromServer = new BufferedReader(new InputStreamReader(link.getInputStream()));
-			PrintWriter dataToServer = new PrintWriter(link.getOutputStream(),true); 
+			DataOutputStream dataToServer = new DataOutputStream(link.getOutputStream()); 
 
 			//Psuedo handshake
 			sendPublicKeyToServer(link);
 			receivePublicKeyFromServer(link);
 			
 			//creating sender thread
-			Sender senderThread = new Sender(dataToServer, link);
+			Sender senderThread = new Sender(dataToServer);
 			
 			//starting the thread
 			senderThread.start();
@@ -229,10 +229,10 @@ public class rte_TCPClient
 class Sender extends Thread{
 	
 	//constructor and printwriter object for sender thread
-	private PrintWriter dataToServer;
+	private DataOutputStream dataToServer;
 
 	
-	public Sender(PrintWriter dataToServer, Socket link) throws IOException{
+	public Sender(DataOutputStream dataToServer) throws IOException{
 		this.dataToServer = dataToServer;
 	}
 
@@ -246,12 +246,14 @@ class Sender extends Thread{
 			
 			String plainMessageToBeSent;		
 			
-			dataToServer.println(rte_TCPClient.username); // sending the username to the server
+			dataToServer.writeUTF(rte_TCPClient.username); // sending the username to the server
 			// Get data from the user, encrypt it, and send it to the server
 			do{		
-				plainMessageToBeSent = userEntry.readLine();			
-				dataToServer.println(rte_TCPClient.encryptMessage(plainMessageToBeSent, rte_TCPClient.serverPublicKey)); 	
-				//dataToServer.println(plainMessageToBeSent);
+				plainMessageToBeSent = userEntry.readLine();
+				byte[] encryptedMessageToBeSent = rte_TCPClient.encryptMessage(plainMessageToBeSent, rte_TCPClient.serverPublicKey);
+				dataToServer.writeInt(encryptedMessageToBeSent.length);
+				dataToServer.write(encryptedMessageToBeSent); 	
+				
 				
 			}while (!plainMessageToBeSent.equals("DONE"));
 			

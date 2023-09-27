@@ -175,7 +175,7 @@ public class rte_TCPServer{													//class static variables to be used by d
 class ClientHandler extends Thread
 {
 	private Socket clientThread;  
-	private BufferedReader dataFromClient;
+	private DataInputStream dataFromClient;
 	private PrintWriter dataToClient;
 	private String user;
 
@@ -185,7 +185,7 @@ class ClientHandler extends Thread
 		clientThread = s;
 		try{
 			//Set up input and output streams for socket
-			dataFromClient = new BufferedReader(new InputStreamReader(clientThread.getInputStream())); 
+			dataFromClient = new DataInputStream(clientThread.getInputStream());
 			dataToClient = new PrintWriter(clientThread.getOutputStream(),true); 
 			
 			receivePublicKeyFromClient();
@@ -251,7 +251,7 @@ class ClientHandler extends Thread
 			
 			
 			//setting up user name
-			String username = dataFromClient.readLine();	
+			String username = dataFromClient.readUTF();	
 			user = username;
 			
 			//if a new user joins a session, the entire chat contents gets echo'd to them
@@ -278,10 +278,11 @@ class ClientHandler extends Thread
 				rte_TCPServer.broadcast(username + " connected to the chatroom", this); //broadcasting to other users that somebody joined
 				
 				//handling and processing incoming data
+				byte[] encryptedMessageFromClient = new byte[dataFromClient.readInt()];
+				dataFromClient.readFully(encryptedMessageFromClient);
 				
-				String encryptedMessageFromClient = dataFromClient.readLine();
-				String messageFromClient;
-				messageFromClient = encryptedMessageFromClient;
+				String messageFromClient = rte_TCPServer.decryptMessage(encryptedMessageFromClient);
+			
 				while (!messageFromClient.equals("DONE")){
 					//System.out.println(username + ": " + messageFromClient);			//printing out username before message					
 					if(!messageFromClient.equals("DONE")) {							//checking "done" so we dont write it to chat file
@@ -291,7 +292,9 @@ class ClientHandler extends Thread
 				
 					dataToClient.flush();	
 					chatLogFile.flush();
-					messageFromClient = dataFromClient.readLine();
+					encryptedMessageFromClient = new byte[dataFromClient.readInt()];
+					dataFromClient.readFully(encryptedMessageFromClient);
+					messageFromClient = rte_TCPServer.decryptMessage(encryptedMessageFromClient);
 				}
 				
 			
