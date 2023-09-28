@@ -11,6 +11,7 @@ import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -20,11 +21,16 @@ import java.util.Scanner;
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
 import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.KeyGenerator;
 import javax.crypto.NoSuchPaddingException;
+import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.*;
 
 import java.security.*;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.X509EncodedKeySpec;
+import java.security.spec.PKCS8EncodedKeySpec;
 
 //main thread class handling list of strings and list of clients
 public class rte_TCPServer{													//class static variables to be used by different threads
@@ -35,8 +41,8 @@ public class rte_TCPServer{													//class static variables to be used by d
 	private static PrivateKey privateKey;
 	public static ArrayList<String> chats = new ArrayList<>();			//storing chats in a static list
 	public static ArrayList<ClientHandler> clients = new ArrayList<>();		//storing users in a static list
-	public static Map<Socket,PublicKey> clientKeyMap = new HashMap<>();
-	
+	public static Map<ClientHandler,PublicKey> clientKeyMap = new HashMap<>();
+
 	public static void main(String[] args) throws NoSuchAlgorithmException{
 		
 		try{
@@ -56,6 +62,8 @@ public class rte_TCPServer{													//class static variables to be used by d
 			System.out.println("Opening port...\n");
 			
 			rsaKeyGeneration();
+			
+			System.out.println(publicKey.toString());
 			// creating socket based on input
 			if(terminalPortnum.equals("")) {									
 				servSock = new ServerSocket(portnum); 
@@ -90,11 +98,19 @@ public class rte_TCPServer{													//class static variables to be used by d
 	
 	public static void rsaKeyGeneration() throws NoSuchAlgorithmException, IOException {
 		KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-		generator.initialize(2048);
+		generator.initialize(3072);
 		KeyPair pair = generator.generateKeyPair();
 		rte_TCPServer.privateKey = pair.getPrivate();
 		rte_TCPServer.publicKey  = pair.getPublic();	
 	}
+	
+	public static byte[] encryptMessage(String plainMessage, PublicKey recipientPublicKey) throws Exception {
+        Cipher encryptCipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        encryptCipher.init(Cipher.ENCRYPT_MODE, recipientPublicKey);
+        byte[] plainMessageBytes = plainMessage.getBytes(StandardCharsets.UTF_8);
+        byte[] encryptedMessageBytes = encryptCipher.doFinal(plainMessageBytes);
+        return encryptedMessageBytes;
+    }
 	
 	public static String decryptMessage(byte[] cipherMessage) {
 	    try {
@@ -109,8 +125,7 @@ public class rte_TCPServer{													//class static variables to be used by d
 	        return "Error: Failed to decrypt the message.";
 	    }
 	}
-
-	
+		
 	/**
 	 * Run program to accept the incoming socket from the client 
 	 * Establishes connection with the client and sets up BufferedReader and PrintWriter
@@ -154,16 +169,20 @@ public class rte_TCPServer{													//class static variables to be used by d
 	 * @param msg
 	 * @param client
 	 * @return void
+	 * @throws Exception 
 	 */
-	public static synchronized void broadcast(String msg, ClientHandler client) {
-		chats.add(msg);
+	public static synchronized void broadcast(ClientHandler client, String plainMessage) throws Exception {
+		chats.add(plainMessage);
 		for(ClientHandler clientel : clients) {  //iterating through clients
 			if(clientel != client) {
-				clientel.sendMessageOverStream(msg);
+				//send plain message bytes and broadcastbytes
+				
+				clientel.sendMessageOverStream(plainMessage, clientel);
 			}
 		}
 	}
 }
+
 
 /**
  * Thread that takes care of all incoming sender threads from client.
@@ -176,7 +195,7 @@ class ClientHandler extends Thread
 {
 	private Socket clientThread;  
 	private DataInputStream dataFromClient;
-	private PrintWriter dataToClient;
+	private DataOutputStream dataToClient;
 	private String user;
 
 	public ClientHandler(Socket s){
@@ -186,7 +205,7 @@ class ClientHandler extends Thread
 		try{
 			//Set up input and output streams for socket
 			dataFromClient = new DataInputStream(clientThread.getInputStream());
-			dataToClient = new PrintWriter(clientThread.getOutputStream(),true); 
+			dataToClient = new DataOutputStream(clientThread.getOutputStream()); 
 			
 			receivePublicKeyFromClient();
 			sendPublicKeyToClient();
@@ -198,11 +217,17 @@ class ClientHandler extends Thread
 	/**
 	 * Simple send method that sends parameter msg to client thread
 	 * @param msg
+	 * @throws Exception 
 	 */
 	// Data stream to client, must encrypt
-	public void sendMessageOverStream(String msg) {	
-		dataToClient.println(msg);
+	public void sendMessageOverStream(String messageFromClient, ClientHandler client) throws Exception {
+	    byte[] encryptedMessage = rte_TCPServer.encryptMessage(messageFromClient, rte_TCPServer.clientKeyMap.get(client));
+	   
+	    dataToClient.writeInt(encryptedMessage.length);
+	    dataToClient.write(encryptedMessage);
+	
 	}
+
 	
 	// Function to send the server's public key to the client
 	private void sendPublicKeyToClient() {
@@ -232,7 +257,7 @@ class ClientHandler extends Thread
 	        
 	        
 	        PublicKey clientPublicKey = keyFactory.generatePublic(keySpec);
-	        rte_TCPServer.clientKeyMap.put(this.clientThread, clientPublicKey);
+	        rte_TCPServer.clientKeyMap.put(this, clientPublicKey);
 
 	        //System.out.println("Received server public key: " + rte_TCPClient.serverPublicKey);
 	    } catch (IOException | NoSuchAlgorithmException | InvalidKeySpecException e) {
@@ -250,17 +275,21 @@ class ClientHandler extends Thread
 			Scanner scannerForChatFile = new Scanner(rte_TCPServer.chatfile);			
 			
 			
-			//setting up user name
-			String username = dataFromClient.readUTF();	
+		
+			String username;
+			byte[] encryptedUsernameFromClient = new byte[dataFromClient.readInt()];
+			dataFromClient.readFully(encryptedUsernameFromClient);
+			username = rte_TCPServer.decryptMessage(encryptedUsernameFromClient);
 			user = username;
+			System.out.println(username + " decrypted and joined");
 			
 			//if a new user joins a session, the entire chat contents gets echo'd to them
 			String textFromChatFile = "";
 			try {
 				if(rte_TCPServer.clients.size() > 1) { //checking for users using shared data structure
 					if(readChatFile.ready()) {
-						while(textFromChatFile != null) {
-							sendMessageOverStream(textFromChatFile);
+						while(textFromChatFile != null) {							
+							rte_TCPServer.broadcast(this, textFromChatFile);
 							textFromChatFile = scannerForChatFile.nextLine();
 						}
 					}
@@ -274,31 +303,50 @@ class ClientHandler extends Thread
 				scannerForChatFile.close();
 				
 				//New user joining
-				chatLogFile.write(username + " connected to the chatroom\n");  //logging to chat when a connection is made
-				rte_TCPServer.broadcast(username + " connected to the chatroom", this); //broadcasting to other users that somebody joined
-				
+				String connectionMessage = username + " connected to the chatroom";
+				chatLogFile.write(connectionMessage);  //logging to chat when a connection is made
+				try {
+				rte_TCPServer.broadcast(this, connectionMessage); //broadcasting to other users that somebody joined
+				} catch(Exception e) {
+					e.printStackTrace();
+				}
 				//handling and processing incoming data
 				byte[] encryptedMessageFromClient = new byte[dataFromClient.readInt()];
 				dataFromClient.readFully(encryptedMessageFromClient);
 				
 				String messageFromClient = rte_TCPServer.decryptMessage(encryptedMessageFromClient);
-			
-				while (!messageFromClient.equals("DONE")){
-					//System.out.println(username + ": " + messageFromClient);			//printing out username before message					
-					if(!messageFromClient.equals("DONE")) {							//checking "done" so we dont write it to chat file
-						chatLogFile.write(username + ": " + messageFromClient + "\n");  //logging message
-						rte_TCPServer.broadcast(username + ": " + messageFromClient, this);  //broadcasting to other users the message
+				try {
+		
+					while (!messageFromClient.equals("DONE")){
+						//System.out.println(username + ": " + messageFromClient);			//printing out username before message					
+						if(!messageFromClient.equals("DONE")) {							//checking "done" so we dont write it to chat file
+							String usernameAndMessage = username + ": " + messageFromClient + "\n";
+							chatLogFile.write(usernameAndMessage);  //logging message
+							rte_TCPServer.broadcast(this, usernameAndMessage);  //broadcasting to other users the message
+						}
+					
+						dataToClient.flush();	
+						chatLogFile.flush();
+						encryptedMessageFromClient = new byte[dataFromClient.readInt()];
+						dataFromClient.readFully(encryptedMessageFromClient);
+						messageFromClient = rte_TCPServer.decryptMessage(encryptedMessageFromClient);
+					
 					}
-				
-					dataToClient.flush();	
-					chatLogFile.flush();
-					encryptedMessageFromClient = new byte[dataFromClient.readInt()];
-					dataFromClient.readFully(encryptedMessageFromClient);
-					messageFromClient = rte_TCPServer.decryptMessage(encryptedMessageFromClient);
+				} catch (InvalidKeyException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				} catch (NoSuchAlgorithmException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				} catch (SignatureException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				} catch (Exception e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
 				}
-				
 			
-
+				
 				chatLogFile.write(username + " disconnected from the chatroom\n"); //logging when someone disconnects from chatroom
 				chatLogFile.close();
 
@@ -314,7 +362,9 @@ class ClientHandler extends Thread
 
 		finally{
 			try{
-				rte_TCPServer.broadcast(user + " disconnected from the chatroom", this); //broadcasting that a user left the chatroom
+				String disconnectMessage = user + " disconnected from the chatroom";
+				
+				rte_TCPServer.broadcast(this, disconnectMessage); //broadcasting that a user left the chatroom
 				System.out.println(user + " disconnected from the chatroom");  //printing to the server that a user left the chatroom
 				rte_TCPServer.clients.remove(this);		//removing that user that disconnected from shared data structure
 
@@ -328,6 +378,9 @@ class ClientHandler extends Thread
 			catch(IOException e){
 				System.out.println("Unable to disconnect!");
 				System.exit(1);
+			} catch (Exception e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
 			}
 		}
 

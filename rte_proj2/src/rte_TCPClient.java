@@ -11,7 +11,7 @@
 // java TCPClient.java -p 22700 -u rron == java TCPClient.java -u rron -p 22700
 
 import java.io.*;
-
+import java.math.BigInteger;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -19,17 +19,22 @@ import java.security.InvalidKeyException;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.security.Signature;
+import java.security.SignatureException;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.Arrays;
 import java.util.Scanner;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
 import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
+import javax.crypto.SecretKey;
 //main class that acts as a listener thread for the server
 public class rte_TCPClient
 {
@@ -41,7 +46,7 @@ public class rte_TCPClient
 	private static PrivateKey privateKey;
 	public static PublicKey serverPublicKey;
 	
-	public static void main(String[] args) throws NoSuchAlgorithmException
+	public static void main(String[] args) throws NoSuchAlgorithmException, InvalidKeyException, SignatureException, NoSuchPaddingException, IllegalBlockSizeException, BadPaddingException
 
 	{
 		try {
@@ -97,9 +102,14 @@ public class rte_TCPClient
 	 * @param port
 	 * @return void
 	 * @throws NoSuchAlgorithmException 
+	 * @throws BadPaddingException 
+	 * @throws IllegalBlockSizeException 
+	 * @throws NoSuchPaddingException 
+	 * @throws SignatureException 
+	 * @throws InvalidKeyException 
 	 * @throws InterruptedException 
 	 */
-	private static void run(int port) throws NoSuchAlgorithmException{
+	private static void run(int port) throws NoSuchAlgorithmException, InvalidKeyException, SignatureException, NoSuchPaddingException, IllegalBlockSizeException, BadPaddingException{
 		Socket link = null;
 
 		try{
@@ -107,8 +117,10 @@ public class rte_TCPClient
 			link = new Socket(host,port); 
 			rsaKeyGeneration();
 
+			System.out.println(privateKey.toString());
+			
 			// Set up input and output streams for the connection
-			BufferedReader dataFromServer = new BufferedReader(new InputStreamReader(link.getInputStream()));
+			DataInputStream dataFromServer = new DataInputStream(link.getInputStream());
 			DataOutputStream dataToServer = new DataOutputStream(link.getOutputStream()); 
 
 			//Psuedo handshake
@@ -121,12 +133,26 @@ public class rte_TCPClient
 			//starting the thread
 			senderThread.start();
 			
-			//chat contents being sent if a new user connects
-			String chatContentTemp;
-			chatContentTemp = dataFromServer.readLine();
-			while(chatContentTemp != null) {
-				System.out.println(chatContentTemp);
-				chatContentTemp = dataFromServer.readLine();
+			// Initial read 
+			byte[] encryptedMessage = new byte[dataFromServer.readInt()];
+			dataFromServer.readFully(encryptedMessage);	
+			
+			String decryptedMessage = decryptMessage(encryptedMessage);
+		    System.out.print(decryptedMessage);
+			
+			while (true) {
+			    // Read the next signed message
+			    int messageLength = dataFromServer.readInt();
+			    if (messageLength == -1) {
+			        // No more messages to read, exit the loop
+			        break;
+			    }
+		    
+			    byte[] nextEncryptedBytes = new byte[messageLength];
+			    dataFromServer.readFully(nextEncryptedBytes);	    
+			    decryptedMessage = decryptMessage(nextEncryptedBytes);
+			    System.out.print(decryptedMessage);
+			   
 			}
 			
 			dataToServer.flush();
@@ -163,6 +189,7 @@ public class rte_TCPClient
 		}
 
 	}
+	
 	private static void sendPublicKeyToServer(Socket link) {
 		 try {
 		        DataOutputStream keyStreamToServer = new DataOutputStream(link.getOutputStream());
@@ -201,7 +228,7 @@ public class rte_TCPClient
 	
 	public static void rsaKeyGeneration() throws NoSuchAlgorithmException, IOException {
 		KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-		generator.initialize(2048);
+		generator.initialize(3078);
 		KeyPair pair = generator.generateKeyPair();
 		rte_TCPClient.privateKey = pair.getPrivate();
 		rte_TCPClient.publicKey  = pair.getPublic();	
@@ -215,15 +242,19 @@ public class rte_TCPClient
 	        return encryptedMessageBytes;
 	    }
 	
-	public static String decryptMessage(byte[] cipherMessage) throws InvalidKeyException, NoSuchAlgorithmException, NoSuchPaddingException, IllegalBlockSizeException, BadPaddingException {
-		Cipher decryptCipher = Cipher.getInstance("RSA");
-		decryptCipher.init(Cipher.DECRYPT_MODE, privateKey);
-		byte[] cipherMessageBytes = decryptCipher.doFinal(cipherMessage);
-		String decryptedMessage = new String(cipherMessageBytes, StandardCharsets.UTF_8);
-		
-		return decryptedMessage;	
-	}
-	
+	 public static String decryptMessage(byte[] cipherMessage) {
+		    try {
+		        Cipher decryptCipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+		        decryptCipher.init(Cipher.DECRYPT_MODE, rte_TCPClient.privateKey);
+		        byte[] cipherMessageBytes = decryptCipher.doFinal(cipherMessage);
+		        String decryptedMessage = new String(cipherMessageBytes, StandardCharsets.UTF_8);
+		        return decryptedMessage;
+		    } catch (InvalidKeyException | NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException | BadPaddingException e) {
+		        e.printStackTrace();
+		        // Handle the exception or return an error message as needed
+		        return "Error: Failed to decrypt the message.";
+		    }
+		}	
 }
 //The sender class reads messages typed at the keyboard, and sends them to the server
 class Sender extends Thread{
@@ -246,7 +277,10 @@ class Sender extends Thread{
 			
 			String plainMessageToBeSent;		
 			
-			dataToServer.writeUTF(rte_TCPClient.username); // sending the username to the server
+			byte[] encryptedUsernameToBeSent = rte_TCPClient.encryptMessage(rte_TCPClient.username, rte_TCPClient.serverPublicKey);
+			dataToServer.writeInt(encryptedUsernameToBeSent.length);
+			dataToServer.write(encryptedUsernameToBeSent);
+		
 			// Get data from the user, encrypt it, and send it to the server
 			do{		
 				plainMessageToBeSent = userEntry.readLine();
