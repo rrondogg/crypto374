@@ -116,14 +116,12 @@ public class rte_TCPClient
 			// Establish a connection to the server
 			link = new Socket(host,port); 
 			rsaKeyGeneration();
-
-			System.out.println(privateKey.toString());
 			
 			// Set up input and output streams for the connection
 			DataInputStream dataFromServer = new DataInputStream(link.getInputStream());
 			DataOutputStream dataToServer = new DataOutputStream(link.getOutputStream()); 
 
-			//Psuedo handshake
+			//Pseudo handshake
 			sendPublicKeyToServer(link);
 			receivePublicKeyFromServer(link);
 			
@@ -132,6 +130,7 @@ public class rte_TCPClient
 			
 			//starting the thread
 			senderThread.start();
+			System.out.println("Connected to server succesfully! Type a message...");
 			
 			// Initial read 
 			byte[] encryptedMessage = new byte[dataFromServer.readInt()];
@@ -162,6 +161,9 @@ public class rte_TCPClient
 			dataFromServer.close();
 
 
+		}catch(EOFException e) {
+			System.out.println("Disconnected Succesfully.");
+			System.exit(1);
 		}catch(ConnectException e) {
 			System.out.println("\nConnection Error");
 			System.out.println("Please make sure that your server is running and that your command arguments are of the following format in any order:");
@@ -313,8 +315,6 @@ class Sender extends Thread{
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		} catch (Exception e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
 		}
 	}
 }

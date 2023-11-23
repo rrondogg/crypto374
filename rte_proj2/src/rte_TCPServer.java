@@ -63,7 +63,6 @@ public class rte_TCPServer{													//class static variables to be used by d
 			
 			rsaKeyGeneration();
 			
-			System.out.println(publicKey.toString());
 			// creating socket based on input
 			if(terminalPortnum.equals("")) {									
 				servSock = new ServerSocket(portnum); 
@@ -281,7 +280,7 @@ class ClientHandler extends Thread
 			dataFromClient.readFully(encryptedUsernameFromClient);
 			username = rte_TCPServer.decryptMessage(encryptedUsernameFromClient);
 			user = username;
-			System.out.println(username + " decrypted and joined");
+			System.out.println(username + " authenticated and joined");
 			
 			//if a new user joins a session, the entire chat contents gets echo'd to them
 			String textFromChatFile = "";
@@ -303,7 +302,7 @@ class ClientHandler extends Thread
 				scannerForChatFile.close();
 				
 				//New user joining
-				String connectionMessage = username + " connected to the chatroom";
+				String connectionMessage = username + " connected to the chatroom\n";
 				chatLogFile.write(connectionMessage);  //logging to chat when a connection is made
 				try {
 				rte_TCPServer.broadcast(this, connectionMessage); //broadcasting to other users that somebody joined
@@ -362,7 +361,7 @@ class ClientHandler extends Thread
 
 		finally{
 			try{
-				String disconnectMessage = user + " disconnected from the chatroom";
+				String disconnectMessage = user + " disconnected from the chatroom\n";
 				
 				rte_TCPServer.broadcast(this, disconnectMessage); //broadcasting that a user left the chatroom
 				System.out.println(user + " disconnected from the chatroom");  //printing to the server that a user left the chatroom
